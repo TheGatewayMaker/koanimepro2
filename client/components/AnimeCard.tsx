@@ -9,6 +9,7 @@ export interface AnimeSummary {
   rating?: number | null; // 0-10
   subDub?: "SUB" | "DUB" | "SUB/DUB" | null;
   genres?: string[];
+  isNewSeason?: boolean;
 }
 
 export function AnimeCard({ anime }: { anime: AnimeSummary }) {
