@@ -111,7 +111,7 @@ export default function AnimePage() {
         <div>
           {info && (
             <section className="relative overflow-hidden">
-              <div className="relative aspect-[16/6] w-full">
+              <div className="relative h-48 md:h-56 lg:h-64 w-full">
                 <img
                   src={banner}
                   alt="banner"
@@ -119,15 +119,15 @@ export default function AnimePage() {
                 />
                 <div className="absolute inset-0 bg-gradient-to-b from-background/10 via-background/30 to-background" />
               </div>
-              <div className="container mx-auto px-4 py-6 md:py-8">
+              <div className="container mx-auto px-4 py-4 md:py-6">
                 <div className="flex flex-col gap-6 md:flex-row">
                   <img
                     src={info.image}
                     alt={info.title}
-                    className="h-[260px] w-[200px] rounded-md border object-cover"
+                    className="h-[220px] w-[170px] rounded-md border object-cover"
                   />
                   <div className="flex-1">
-                    <h1 className="text-2xl font-bold md:text-4xl">
+                    <h1 className="text-xl font-bold md:text-3xl">
                       {info.title}
                     </h1>
                     <div className="mt-2 text-sm text-foreground/70">
