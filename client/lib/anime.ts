@@ -191,7 +191,11 @@ export async function fetchEpisodes(
   try {
     const res = await fetch(`/api/anime/episodes/${id}?page=${page}`);
     if (!res.ok) {
-      console.error("fetchEpisodes failed", res.status, await res.text().catch(() => ""));
+      console.error(
+        "fetchEpisodes failed",
+        res.status,
+        await res.text().catch(() => ""),
+      );
       return { episodes: [], pagination: null };
     }
     const data = await res.json();
