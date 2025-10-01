@@ -180,15 +180,14 @@ export default function AnimePage() {
                     aria-label="Select season"
                   >
                     {(() => {
+                      const totalItems =
+                        (episodesPagination?.items?.total as number) ||
+                        info?.episodes_count ||
+                        episodes.length ||
+                        0;
                       const last =
                         episodesPagination?.last_visible_page ??
-                        Math.max(
-                          1,
-                          Math.ceil(
-                            ((episodesPagination?.items?.total as number) ||
-                              episodes.length) / 24,
-                          ),
-                        );
+                        Math.max(1, Math.ceil(totalItems / 24));
                       const count = Math.max(1, Number(last || 1));
                       return Array.from({ length: count }).map((_, i) => (
                         <option key={i} value={i + 1}>
