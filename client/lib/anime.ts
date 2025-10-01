@@ -8,6 +8,7 @@ export interface ApiAnimeSummary {
   subDub?: "SUB" | "DUB" | "SUB/DUB" | null;
   genres?: string[];
   synopsis?: string;
+  seasons?: { id: number; number: number; title?: string }[];
 }
 
 export async function fetchTrending(): Promise<ApiAnimeSummary[]> {
