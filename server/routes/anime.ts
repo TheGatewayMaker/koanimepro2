@@ -258,13 +258,16 @@ export const getEpisodes: RequestHandler = async (req, res) => {
     const primary = await fetchJson(`${JIKAN_BASE}/anime/${id}/episodes?page=${page}`);
     if (primary.ok) {
       const j = primary.json as any;
-      const episodes = (j.data || []).map((ep: any) => ({
-        id: String(ep.mal_id ?? `${id}-${ep.episode ?? ""}`),
-        number:
-          typeof ep.episode === "number" ? ep.episode : Number(ep.episode) || 0,
-        title: ep.title || ep.title_romanji || ep.title_japanese || undefined,
-        air_date: ep.aired || null,
-      }));
+      const episodes = (j.data || []).map((ep: any, idx: number) => {
+        const numRaw = ep.episode;
+        const num = typeof numRaw === "number" ? numRaw : Number(numRaw) || 0;
+        return {
+          id: String(ep.mal_id ?? `${id}-${num || idx + 1}`),
+          number: num > 0 ? num : idx + 1,
+          title: ep.title || ep.title_romanji || ep.title_japanese || undefined,
+          air_date: ep.aired || null,
+        };
+      });
       const payload = { episodes, pagination: j.pagination || null };
       // Cache even empty to avoid hammering the API
       episodesCache[cacheKey] = { at: now, data: payload };
