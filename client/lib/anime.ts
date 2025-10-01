@@ -206,7 +206,12 @@ function normalizeEpisodesResponse(data: any): EpisodesResponse {
   const base = data.episodes || data.results || data.data || [];
   const episodes = base.map((ep: any, idx: number) => {
     const number =
-      ep.number ?? ep.episode ?? ep.episode_number ?? ep.ep ?? ep.ep_num ?? null;
+      ep.number ??
+      ep.episode ??
+      ep.episode_number ??
+      ep.ep ??
+      ep.ep_num ??
+      null;
     const title =
       ep.title || ep.name || ep.episodeTitle || ep.title_english || undefined;
     const air_date = ep.air_date ?? ep.aired ?? ep.date ?? null;
