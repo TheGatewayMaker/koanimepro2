@@ -20,19 +20,24 @@ function normalizeBaseTitle(title: string) {
 
 function mapAnime(a: any) {
   const images = a.images?.jpg || a.images?.webp || {};
-  const baseTitle = normalizeBaseTitle(
-    a.title || a.title_english || a.title_japanese,
-  );
+  const originalTitle = a.title || a.title_english || a.title_japanese || "";
+  const baseTitle = normalizeBaseTitle(originalTitle);
+  const nowYear = new Date().getFullYear();
+  const year = a.year ?? a.aired?.prop?.from?.year ?? null;
+  const airing = a.airing === true || a.status === "Currently Airing";
+  const seasonMarker = /(season\s*\d+|part\s*\d+|cour\s*\d+|final\s*season|\bii\b|\biii\b|\biv\b|\bv\b|\bvi\b|\bvii\b|\bviii\b|\bix\b|\bx\b|\d+\s*$)/i.test(originalTitle);
+  const isNewSeason = seasonMarker && (airing || (year === nowYear));
   return {
     id: a.mal_id,
     title: baseTitle,
     image: images.large_image_url || images.image_url || images.small_image_url,
     type: a.type || undefined,
-    year: a.year ?? a.aired?.prop?.from?.year ?? null,
+    year,
     rating: typeof a.score === "number" ? a.score : null,
     subDub: "SUB",
     genres: Array.isArray(a.genres) ? a.genres.map((g: any) => g.name) : [],
     synopsis: a.synopsis || "",
+    isNewSeason,
   };
 }
 
