@@ -201,7 +201,25 @@ export const getEpisodes: RequestHandler = async (req, res) => {
         for (const p of providers) {
           try {
             const url = `${CONSUMET}/anime/${p}/info/${slug}`;
-            const jC = await tryFetchJson(url);
+            let jC = null;
+            try {
+              jC = await tryFetchJson(url);
+            } catch (err) {
+              // try a search fallback for provider to obtain an id
+              try {
+                const searchUrl = `${CONSUMET}/anime/${p}/${encodeURIComponent(title)}?page=1`;
+                const js = await tryFetchJson(searchUrl);
+                const hits = js?.results || js?.data || js || [];
+                const first = Array.isArray(hits) && hits.length > 0 ? hits[0] : null;
+                const candidateId = first?.id || first?._id || first?.animeId || first?.slug || first?.mal_id || null;
+                if (candidateId) {
+                  jC = await tryFetchJson(`${CONSUMET}/anime/${p}/info/${candidateId}`);
+                }
+              } catch (e2) {
+                // ignore search fallback errors
+              }
+            }
+
             const arr =
               jC?.episodes ||
               jC?.results ||
