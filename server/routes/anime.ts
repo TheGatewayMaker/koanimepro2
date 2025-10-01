@@ -14,6 +14,7 @@ function mapAnime(a: any) {
     subDub: "SUB", // Jikan doesn't provide sub/dub; default to SUB
     genres: Array.isArray(a.genres) ? a.genres.map((g: any) => g.name) : [],
     synopsis: a.synopsis || "",
+    episodes_count: typeof a.episodes === "number" ? a.episodes : null,
   };
 }
 
