@@ -9,6 +9,7 @@ export interface ApiAnimeSummary {
   genres?: string[];
   synopsis?: string;
   seasons?: { id: number; number: number; title?: string }[];
+  isNewSeason?: boolean;
 }
 
 export async function fetchTrending(): Promise<ApiAnimeSummary[]> {
