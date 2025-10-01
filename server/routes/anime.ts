@@ -293,7 +293,7 @@ export const getEpisodes: RequestHandler = async (req, res) => {
       console.warn("jikan episodes fetch failed", String(e));
     }
 
-    // 3) Fallback: attempt to fetch basic info and generate numbered episodes if episodes count available
+    // 4) Fallback: attempt to fetch basic info and generate numbered episodes if episodes count available
     try {
       const infoUrl = `${JIKAN_BASE}/anime/${id}/full`;
       const inf = await tryFetchJson(infoUrl).catch(() => null);
