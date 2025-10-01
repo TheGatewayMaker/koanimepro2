@@ -168,7 +168,57 @@ export const getEpisodes: RequestHandler = async (req, res) => {
     const id = req.params.id;
     const page = Number(req.query.page || 1);
 
-    // 1) Jikan episodes (primary - reliable and provides pagination)
+    // 1) Try Gogoanime via Consumet (user requested provider)
+    try {
+      const infoShort = await tryFetchJson(`${JIKAN_BASE}/anime/${id}`).catch(() => null);
+      const title =
+        infoShort?.data?.title || infoShort?.data?.title_english || infoShort?.data?.title_japanese;
+      const CONSUMET = "https://api.consumet.org";
+      if (title) {
+        // Try direct info by slug
+        const slug = slugify(title);
+        let jC: any = null;
+        try {
+          jC = await tryFetchJson(`${CONSUMET}/anime/gogoanime/info/${slug}`);
+        } catch (err) {
+          // Try search fallback to get provider id
+          try {
+            const searchUrl = `${CONSUMET}/anime/gogoanime/${encodeURIComponent(title)}?page=${page}`;
+            const js = await tryFetchJson(searchUrl);
+            const hits = js?.results || js?.data || js || [];
+            const first = Array.isArray(hits) && hits.length > 0 ? hits[0] : null;
+            const candidateId = first?.id || first?._id || first?.animeId || first?.slug || first?.mal_id || null;
+            if (candidateId) {
+              jC = await tryFetchJson(`${CONSUMET}/anime/gogoanime/info/${candidateId}`);
+            }
+          } catch (e2) {
+            /* ignore */
+          }
+        }
+
+        const arr = jC?.episodes || jC?.results || jC?.data?.episodes || jC?.data || null;
+        if (Array.isArray(arr) && arr.length > 0) {
+          const episodes = arr.map((ep: any) => {
+            const number = ep.number ?? ep.episode ?? ep.ep ?? ep.ep_num ?? ep.index ?? null;
+            const title = ep.title || ep.name || ep.episodeTitle || ep.title_english || null;
+            const air_date = ep.air_date ?? ep.aired ?? ep.date ?? null;
+            const eid = ep.id ?? ep.mal_id ?? `${id}-${number ?? "0"}`;
+            return {
+              id: String(eid),
+              number: typeof number === "number" ? number : Number(number) || 0,
+              title: title || undefined,
+              air_date,
+            };
+          });
+          const last_visible_page = Math.max(1, Math.ceil((arr?.length || 0) / 24));
+          return res.json({ episodes, pagination: { page, has_next_page: false, last_visible_page } });
+        }
+      }
+    } catch (e) {
+      console.warn("gogoanime consumet fetch failed", String(e));
+    }
+
+    // 2) Jikan episodes (primary - reliable and provides pagination)
     try {
       const jikanUrl = `${JIKAN_BASE}/anime/${id}/episodes?page=${page}`;
       const json = await tryFetchJson(jikanUrl);
@@ -185,7 +235,7 @@ export const getEpisodes: RequestHandler = async (req, res) => {
       console.warn("jikan episodes fetch failed", String(e));
     }
 
-    // 2) Try Consumet providers (use title->slug to lookup)
+    // 3) Try Consumet providers (use title->slug to lookup)
     try {
       const infoShort = await tryFetchJson(`${JIKAN_BASE}/anime/${id}`).catch(
         () => null,
