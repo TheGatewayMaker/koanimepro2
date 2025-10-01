@@ -6,16 +6,31 @@ const JIKAN_BASE = "https://api.jikan.moe/v4";
 const EPISODES_TTL_MS = 3 * 60 * 1000;
 const episodesCache: Record<string, { at: number; data: { episodes: any[]; pagination: any } }> = {};
 
+function normalizeBaseTitle(title: string) {
+  let s = String(title || "").trim();
+  s = s.replace(/\s*-\s*(Season|Cour|Part)\s*\d+$/i, "");
+  s = s.replace(/\s*\(\s*(Season|Cour|Part)\s*\d+\s*\)$/i, "");
+  s = s.replace(/\s*\b(\d+)(st|nd|rd|th)\s+Season\b.*$/i, "");
+  s = s.replace(/\s*\bSeason\s+\d+(?:\s*Part\s*\d+)?\b.*$/i, "");
+  s = s.replace(/\s*\bFinal Season(?:\s*Part\s*\d+)?\b.*$/i, "");
+  s = s.replace(/\s+(?:II|III|IV|V|VI|VII|VIII|IX|X)$/i, "");
+  s = s.replace(/\s+\d+$/i, "");
+  return s.trim();
+}
+
 function mapAnime(a: any) {
   const images = a.images?.jpg || a.images?.webp || {};
+  const baseTitle = normalizeBaseTitle(
+    a.title || a.title_english || a.title_japanese,
+  );
   return {
     id: a.mal_id,
-    title: a.title || a.title_english || a.title_japanese,
+    title: baseTitle,
     image: images.large_image_url || images.image_url || images.small_image_url,
     type: a.type || undefined,
     year: a.year ?? a.aired?.prop?.from?.year ?? null,
     rating: typeof a.score === "number" ? a.score : null,
-    subDub: "SUB", // Jikan doesn't provide sub/dub; default to SUB
+    subDub: "SUB",
     genres: Array.isArray(a.genres) ? a.genres.map((g: any) => g.name) : [],
     synopsis: a.synopsis || "",
   };
@@ -74,10 +89,67 @@ export const getInfo: RequestHandler = async (req, res) => {
       return json.data ?? null;
     }
 
+    function pickRelation(entries: any[] | undefined, kind: "Prequel" | "Sequel") {
+      if (!Array.isArray(entries)) return null;
+      const tv = entries.find((e) => e.type === "anime" && e.entry?.some?.((x: any) => x.type === "TV"));
+      const any = entries[0];
+      const target = tv || any;
+      const entry = target?.entry?.find?.((x: any) => x.type === "TV") || target?.entry?.[0] || null;
+      return entry ? { id: entry.mal_id, title: entry.name } : null;
+    }
+
+    async function buildSeasonsChain(startData: any): Promise<{ ids: number[]; titles: Record<number, string> }> {
+      const seen = new Set<number>();
+      const titles: Record<number, string> = {};
+      let current = startData;
+      let currentId = Number(current.mal_id);
+      titles[currentId] = current.title || current.title_english || current.title_japanese;
+
+      // Walk back to base via prequels
+      const back: number[] = [];
+      let node = current;
+      for (let i = 0; i < 8; i++) {
+        const preRel = node.relations?.find?.((r: any) => r.relation === "Prequel");
+        const pre = pickRelation([preRel].filter(Boolean) as any, "Prequel");
+        if (!pre || seen.has(pre.id)) break;
+        seen.add(pre.id);
+        back.push(pre.id);
+        const full = await fetchByMal(String(pre.id));
+        if (!full) break;
+        titles[pre.id] = full.title || full.title_english || full.title_japanese;
+        node = full;
+      }
+
+      // Base is last back or current
+      const baseId = back.length > 0 ? back[back.length - 1] : currentId;
+      const chain: number[] = [...back.reverse(), currentId];
+
+      // Walk forward from current/base via sequels
+      node = current;
+      for (let i = 0; i < 8; i++) {
+        const seqRel = node.relations?.find?.((r: any) => r.relation === "Sequel");
+        const seq = pickRelation([seqRel].filter(Boolean) as any, "Sequel");
+        if (!seq || seen.has(seq.id)) break;
+        seen.add(seq.id);
+        const full = await fetchByMal(String(seq.id));
+        if (!full) break;
+        titles[seq.id] = full.title || full.title_english || full.title_japanese;
+        chain.push(seq.id);
+        node = full;
+      }
+
+      return { ids: chain, titles };
+    }
+
     // If numeric id provided, try Jikan directly
     if (/^\d+$/.test(raw)) {
       const data = await fetchByMal(raw);
-      if (data) return res.json(mapAnime(data));
+      if (data) {
+        const base = mapAnime(data);
+        const chain = await buildSeasonsChain(data).catch(() => null);
+        const seasons = chain ? chain.ids.map((id, i) => ({ id, number: i + 1, title: normalizeBaseTitle(chain.titles[id] || "") })) : [];
+        return res.json({ ...base, seasons });
+      }
     }
 
     // Not numeric or initial fetch failed: try searching Jikan by title (replace hyphens with spaces)
@@ -113,7 +185,12 @@ export const getInfo: RequestHandler = async (req, res) => {
           // If we can find mal_id, fetch full from Jikan
           if (ep) {
             const data = await fetchByMal(String(ep));
-            if (data) return res.json(mapAnime(data));
+            if (data) {
+              const base = mapAnime(data);
+              const chain = await buildSeasonsChain(data).catch(() => null);
+              const seasons = chain ? chain.ids.map((id, i) => ({ id, number: i + 1, title: normalizeBaseTitle(chain.titles[id] || "") })) : [];
+              return res.json({ ...base, seasons });
+            }
           }
           // Otherwise try to map consumet info fields
           const title = j?.title || j?.data?.title || j?.name || null;
@@ -121,7 +198,7 @@ export const getInfo: RequestHandler = async (req, res) => {
           if (title) {
             return res.json({
               id: j?.mal_id || null,
-              title,
+              title: normalizeBaseTitle(title),
               image,
               type: j?.type || null,
               year: j?.year || null,
@@ -129,6 +206,7 @@ export const getInfo: RequestHandler = async (req, res) => {
               subDub: null,
               genres: j?.genres || [],
               synopsis: j?.description || j?.data?.description || null,
+              seasons: [],
             });
           }
         } catch (e) {
