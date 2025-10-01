@@ -62,7 +62,7 @@ export function BannerCarousel({ items }: { items: BannerItem[] }) {
       onMouseEnter={() => (isHovering.current = true)}
       onMouseLeave={() => (isHovering.current = false)}
     >
-      <div className="overflow-hidden mx-auto max-w-6xl" ref={emblaRef}>
+      <div className="overflow-hidden mx-auto max-w-7xl" ref={emblaRef}>
         <div className="flex touch-pan-y">
           {items.map((item) => (
             <Link
@@ -83,7 +83,7 @@ export function BannerCarousel({ items }: { items: BannerItem[] }) {
                 <div className="absolute inset-0 pointer-events-none bg-gradient-to-t from-black/20 to-transparent" />
 
                 {/* info at bottom-left with text drop shadow instead of a dark block */}
-                <div className="absolute left-6 bottom-6 right-6 max-w-3xl">
+                <div className="absolute left-6 bottom-6 right-6 max-w-4xl">
                   <h3 className="line-clamp-1 text-white text-2xl font-extrabold md:text-5xl filter drop-shadow-[0_8px_20px_rgba(0,0,0,0.7)]">
                     {item.title}
                   </h3>
