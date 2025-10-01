@@ -89,13 +89,11 @@ export const getInfo: RequestHandler = async (req, res) => {
       return json.data ?? null;
     }
 
-    function pickRelation(entries: any[] | undefined, kind: "Prequel" | "Sequel") {
-      if (!Array.isArray(entries)) return null;
-      const tv = entries.find((e) => e.type === "anime" && e.entry?.some?.((x: any) => x.type === "TV"));
-      const any = entries[0];
-      const target = tv || any;
-      const entry = target?.entry?.find?.((x: any) => x.type === "TV") || target?.entry?.[0] || null;
-      return entry ? { id: entry.mal_id, title: entry.name } : null;
+    function pickRelation(rel: any) {
+      if (!rel || !Array.isArray(rel.entry)) return null;
+      const tv = rel.entry.find((x: any) => x.type === "TV");
+      const chosen = tv || rel.entry[0];
+      return chosen ? { id: chosen.mal_id, title: chosen.name } : null;
     }
 
     async function buildSeasonsChain(startData: any): Promise<{ ids: number[]; titles: Record<number, string> }> {
@@ -110,7 +108,7 @@ export const getInfo: RequestHandler = async (req, res) => {
       let node = current;
       for (let i = 0; i < 8; i++) {
         const preRel = node.relations?.find?.((r: any) => r.relation === "Prequel");
-        const pre = pickRelation([preRel].filter(Boolean) as any, "Prequel");
+        const pre = pickRelation(preRel);
         if (!pre || seen.has(pre.id)) break;
         seen.add(pre.id);
         back.push(pre.id);
@@ -121,14 +119,13 @@ export const getInfo: RequestHandler = async (req, res) => {
       }
 
       // Base is last back or current
-      const baseId = back.length > 0 ? back[back.length - 1] : currentId;
       const chain: number[] = [...back.reverse(), currentId];
 
       // Walk forward from current/base via sequels
       node = current;
       for (let i = 0; i < 8; i++) {
         const seqRel = node.relations?.find?.((r: any) => r.relation === "Sequel");
-        const seq = pickRelation([seqRel].filter(Boolean) as any, "Sequel");
+        const seq = pickRelation(seqRel);
         if (!seq || seen.has(seq.id)) break;
         seen.add(seq.id);
         const full = await fetchByMal(String(seq.id));
