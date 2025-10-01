@@ -14,6 +14,7 @@ function mapAnime(a: any) {
     subDub: "SUB", // Jikan doesn't provide sub/dub; default to SUB
     genres: Array.isArray(a.genres) ? a.genres.map((g: any) => g.name) : [],
     synopsis: a.synopsis || "",
+    episodes_count: typeof a.episodes === "number" ? a.episodes : null,
   };
 }
 
@@ -167,7 +168,100 @@ export const getEpisodes: RequestHandler = async (req, res) => {
     const id = req.params.id;
     const page = Number(req.query.page || 1);
 
-    // 1) Try Consumet providers (use title->slug to lookup)
+    // 1) Try Gogoanime via Consumet (user requested provider)
+    try {
+      const infoShort = await tryFetchJson(`${JIKAN_BASE}/anime/${id}`).catch(
+        () => null,
+      );
+      const title =
+        infoShort?.data?.title ||
+        infoShort?.data?.title_english ||
+        infoShort?.data?.title_japanese;
+      const CONSUMET = "https://api.consumet.org";
+      if (title) {
+        // Try direct info by slug
+        const slug = slugify(title);
+        let jC: any = null;
+        try {
+          jC = await tryFetchJson(`${CONSUMET}/anime/gogoanime/info/${slug}`);
+        } catch (err) {
+          // Try search fallback to get provider id
+          try {
+            const searchUrl = `${CONSUMET}/anime/gogoanime/${encodeURIComponent(title)}?page=${page}`;
+            const js = await tryFetchJson(searchUrl);
+            const hits = js?.results || js?.data || js || [];
+            const first =
+              Array.isArray(hits) && hits.length > 0 ? hits[0] : null;
+            const candidateId =
+              first?.id ||
+              first?._id ||
+              first?.animeId ||
+              first?.slug ||
+              first?.mal_id ||
+              null;
+            if (candidateId) {
+              jC = await tryFetchJson(
+                `${CONSUMET}/anime/gogoanime/info/${candidateId}`,
+              );
+            }
+          } catch (e2) {
+            /* ignore */
+          }
+        }
+
+        const arr =
+          jC?.episodes || jC?.results || jC?.data?.episodes || jC?.data || null;
+        if (Array.isArray(arr) && arr.length > 0) {
+          const episodes = arr.map((ep: any) => {
+            const number =
+              ep.number ?? ep.episode ?? ep.ep ?? ep.ep_num ?? ep.index ?? null;
+            const title =
+              ep.title ||
+              ep.name ||
+              ep.episodeTitle ||
+              ep.title_english ||
+              null;
+            const air_date = ep.air_date ?? ep.aired ?? ep.date ?? null;
+            const eid = ep.id ?? ep.mal_id ?? `${id}-${number ?? "0"}`;
+            return {
+              id: String(eid),
+              number: typeof number === "number" ? number : Number(number) || 0,
+              title: title || undefined,
+              air_date,
+            };
+          });
+          const last_visible_page = Math.max(
+            1,
+            Math.ceil((arr?.length || 0) / 24),
+          );
+          return res.json({
+            episodes,
+            pagination: { page, has_next_page: false, last_visible_page },
+          });
+        }
+      }
+    } catch (e) {
+      console.warn("gogoanime consumet fetch failed", String(e));
+    }
+
+    // 2) Jikan episodes (primary - reliable and provides pagination)
+    try {
+      const jikanUrl = `${JIKAN_BASE}/anime/${id}/episodes?page=${page}`;
+      const json = await tryFetchJson(jikanUrl);
+      const episodes = (json.data || []).map((ep: any) => ({
+        id: String(ep.mal_id ?? `${id}-${ep.episode ?? ""}`),
+        number:
+          typeof ep.episode === "number" ? ep.episode : Number(ep.episode) || 0,
+        title: ep.title || ep.title_romanji || ep.title_japanese || undefined,
+        air_date: ep.aired || null,
+      }));
+      const pagination = json.pagination || null;
+      if (episodes.length > 0) return res.json({ episodes, pagination });
+    } catch (e) {
+      console.warn("jikan episodes fetch failed", String(e));
+    }
+
+    // 3) Try Consumet providers (use title->slug to lookup)
     try {
       const infoShort = await tryFetchJson(`${JIKAN_BASE}/anime/${id}`).catch(
         () => null,
@@ -183,7 +277,34 @@ export const getEpisodes: RequestHandler = async (req, res) => {
         for (const p of providers) {
           try {
             const url = `${CONSUMET}/anime/${p}/info/${slug}`;
-            const jC = await tryFetchJson(url);
+            let jC = null;
+            try {
+              jC = await tryFetchJson(url);
+            } catch (err) {
+              // try a search fallback for provider to obtain an id
+              try {
+                const searchUrl = `${CONSUMET}/anime/${p}/${encodeURIComponent(title)}?page=1`;
+                const js = await tryFetchJson(searchUrl);
+                const hits = js?.results || js?.data || js || [];
+                const first =
+                  Array.isArray(hits) && hits.length > 0 ? hits[0] : null;
+                const candidateId =
+                  first?.id ||
+                  first?._id ||
+                  first?.animeId ||
+                  first?.slug ||
+                  first?.mal_id ||
+                  null;
+                if (candidateId) {
+                  jC = await tryFetchJson(
+                    `${CONSUMET}/anime/${p}/info/${candidateId}`,
+                  );
+                }
+              } catch (e2) {
+                // ignore search fallback errors
+              }
+            }
+
             const arr =
               jC?.episodes ||
               jC?.results ||
@@ -250,24 +371,47 @@ export const getEpisodes: RequestHandler = async (req, res) => {
       console.warn("consumet episodes fetch failed", String(e));
     }
 
-    // 2) Try dexter API with timeout/retries
+    // 3) Dexter API fallback
     try {
-      const jikanUrl = `${JIKAN_BASE}/anime/${id}/episodes?page=${page}`;
-      const json = await tryFetchJson(jikanUrl);
-      const episodes = (json.data || []).map((ep: any) => ({
-        id: String(ep.mal_id ?? `${id}-${ep.episode ?? ""}`),
-        number:
-          typeof ep.episode === "number" ? ep.episode : Number(ep.episode) || 0,
-        title: ep.title || ep.title_romanji || ep.title_japanese || undefined,
-        air_date: ep.aired || null,
-      }));
-      const pagination = json.pagination || null;
-      if (episodes.length > 0) return res.json({ episodes, pagination });
+      const dexterUrl = `${ALT_BASE}/anime/${id}/episodes${page > 1 ? `?page=${page}` : ""}`;
+      const j = await tryFetchJson(dexterUrl);
+      const arr = j?.data || j?.results || j?.episodes || j;
+      if (Array.isArray(arr) && arr.length > 0) {
+        const episodes = arr.map((ep: any) => {
+          const number =
+            ep.number ??
+            ep.episode ??
+            ep.episode_number ??
+            ep.ep ??
+            ep.ep_num ??
+            ep.mal_id ??
+            null;
+          const title =
+            ep.title || ep.name || ep.episodeTitle || ep.title_english || null;
+          const air_date = ep.air_date ?? ep.aired ?? ep.date ?? null;
+          const eid = ep.id ?? ep.mal_id ?? `${id}-${number ?? "0"}`;
+          return {
+            id: String(eid),
+            number: typeof number === "number" ? number : Number(number) || 0,
+            title: title || undefined,
+            air_date,
+          };
+        });
+        // try to infer pagination if available
+        const last_visible_page = Math.max(
+          1,
+          Math.ceil((arr?.length || 0) / 24),
+        );
+        return res.json({
+          episodes,
+          pagination: { page, has_next_page: false, last_visible_page },
+        });
+      }
     } catch (e) {
-      console.warn("jikan episodes fetch failed", String(e));
+      console.warn("dexter episodes fetch failed", String(e));
     }
 
-    // 3) Fallback: attempt to fetch basic info and generate numbered episodes if episodes count available
+    // 4) Fallback: attempt to fetch basic info and generate numbered episodes if episodes count available
     try {
       const infoUrl = `${JIKAN_BASE}/anime/${id}/full`;
       const inf = await tryFetchJson(infoUrl).catch(() => null);
