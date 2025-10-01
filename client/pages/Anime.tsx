@@ -36,7 +36,8 @@ export default function AnimePage() {
           setStreams([]);
         } else {
           setInfo(i);
-          const baseSeason = i.seasons && i.seasons.length > 0 ? i.seasons[0].id : id;
+          const baseSeason =
+            i.seasons && i.seasons.length > 0 ? i.seasons[0].id : id;
           setSelectedId(baseSeason);
           const s = await fetchStreams(baseSeason).catch(() => []);
           setStreams(s || []);
@@ -195,7 +196,10 @@ export default function AnimePage() {
                   >
                     {seasons.length > 0 ? (
                       seasons.map((s, i) => (
-                        <option key={s.id} value={s.id}>{`Season ${i + 1}`}</option>
+                        <option
+                          key={s.id}
+                          value={s.id}
+                        >{`Season ${i + 1}`}</option>
                       ))
                     ) : (
                       <option value={selectedId ?? id}>Season 1</option>
@@ -242,7 +246,8 @@ export default function AnimePage() {
                         window.open(streams[0].url, "_blank", "noreferrer");
                       } else {
                         toast("Streaming not available", {
-                          description: "Streaming providers not reported for this title.",
+                          description:
+                            "Streaming providers not reported for this title.",
                           duration: 2500,
                         });
                       }

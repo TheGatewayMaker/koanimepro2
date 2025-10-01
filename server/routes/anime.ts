@@ -4,7 +4,10 @@ const JIKAN_BASE = "https://api.jikan.moe/v4";
 
 // Simple in-memory cache for episodes to mitigate upstream rate limits
 const EPISODES_TTL_MS = 3 * 60 * 1000;
-const episodesCache: Record<string, { at: number; data: { episodes: any[]; pagination: any } }> = {};
+const episodesCache: Record<
+  string,
+  { at: number; data: { episodes: any[]; pagination: any } }
+> = {};
 
 function normalizeBaseTitle(title: string) {
   let s = String(title || "").trim();
@@ -25,8 +28,11 @@ function mapAnime(a: any) {
   const nowYear = new Date().getFullYear();
   const year = a.year ?? a.aired?.prop?.from?.year ?? null;
   const airing = a.airing === true || a.status === "Currently Airing";
-  const seasonMarker = /(season\s*\d+|part\s*\d+|cour\s*\d+|final\s*season|\bii\b|\biii\b|\biv\b|\bv\b|\bvi\b|\bvii\b|\bviii\b|\bix\b|\bx\b|\d+\s*$)/i.test(originalTitle);
-  const isNewSeason = seasonMarker && (airing || (year === nowYear));
+  const seasonMarker =
+    /(season\s*\d+|part\s*\d+|cour\s*\d+|final\s*season|\bii\b|\biii\b|\biv\b|\bv\b|\bvi\b|\bvii\b|\bviii\b|\bix\b|\bx\b|\d+\s*$)/i.test(
+      originalTitle,
+    );
+  const isNewSeason = seasonMarker && (airing || year === nowYear);
   return {
     id: a.mal_id,
     title: baseTitle,
@@ -101,25 +107,31 @@ export const getInfo: RequestHandler = async (req, res) => {
       return chosen ? { id: chosen.mal_id, title: chosen.name } : null;
     }
 
-    async function buildSeasonsChain(startData: any): Promise<{ ids: number[]; titles: Record<number, string> }> {
+    async function buildSeasonsChain(
+      startData: any,
+    ): Promise<{ ids: number[]; titles: Record<number, string> }> {
       const seen = new Set<number>();
       const titles: Record<number, string> = {};
       let current = startData;
       let currentId = Number(current.mal_id);
-      titles[currentId] = current.title || current.title_english || current.title_japanese;
+      titles[currentId] =
+        current.title || current.title_english || current.title_japanese;
 
       // Walk back to base via prequels
       const back: number[] = [];
       let node = current;
       for (let i = 0; i < 8; i++) {
-        const preRel = node.relations?.find?.((r: any) => r.relation === "Prequel");
+        const preRel = node.relations?.find?.(
+          (r: any) => r.relation === "Prequel",
+        );
         const pre = pickRelation(preRel);
         if (!pre || seen.has(pre.id)) break;
         seen.add(pre.id);
         back.push(pre.id);
         const full = await fetchByMal(String(pre.id));
         if (!full) break;
-        titles[pre.id] = full.title || full.title_english || full.title_japanese;
+        titles[pre.id] =
+          full.title || full.title_english || full.title_japanese;
         node = full;
       }
 
@@ -129,13 +141,16 @@ export const getInfo: RequestHandler = async (req, res) => {
       // Walk forward from current/base via sequels
       node = current;
       for (let i = 0; i < 8; i++) {
-        const seqRel = node.relations?.find?.((r: any) => r.relation === "Sequel");
+        const seqRel = node.relations?.find?.(
+          (r: any) => r.relation === "Sequel",
+        );
         const seq = pickRelation(seqRel);
         if (!seq || seen.has(seq.id)) break;
         seen.add(seq.id);
         const full = await fetchByMal(String(seq.id));
         if (!full) break;
-        titles[seq.id] = full.title || full.title_english || full.title_japanese;
+        titles[seq.id] =
+          full.title || full.title_english || full.title_japanese;
         chain.push(seq.id);
         node = full;
       }
@@ -149,7 +164,13 @@ export const getInfo: RequestHandler = async (req, res) => {
       if (data) {
         const base = mapAnime(data);
         const chain = await buildSeasonsChain(data).catch(() => null);
-        const seasons = chain ? chain.ids.map((id, i) => ({ id, number: i + 1, title: normalizeBaseTitle(chain.titles[id] || "") })) : [];
+        const seasons = chain
+          ? chain.ids.map((id, i) => ({
+              id,
+              number: i + 1,
+              title: normalizeBaseTitle(chain.titles[id] || ""),
+            }))
+          : [];
         return res.json({ ...base, seasons });
       }
     }
@@ -190,7 +211,13 @@ export const getInfo: RequestHandler = async (req, res) => {
             if (data) {
               const base = mapAnime(data);
               const chain = await buildSeasonsChain(data).catch(() => null);
-              const seasons = chain ? chain.ids.map((id, i) => ({ id, number: i + 1, title: normalizeBaseTitle(chain.titles[id] || "") })) : [];
+              const seasons = chain
+                ? chain.ids.map((id, i) => ({
+                    id,
+                    number: i + 1,
+                    title: normalizeBaseTitle(chain.titles[id] || ""),
+                  }))
+                : [];
               return res.json({ ...base, seasons });
             }
           }
@@ -255,7 +282,9 @@ export const getEpisodes: RequestHandler = async (req, res) => {
     }
 
     // 1) Primary: Jikan episodes
-    const primary = await fetchJson(`${JIKAN_BASE}/anime/${id}/episodes?page=${page}`);
+    const primary = await fetchJson(
+      `${JIKAN_BASE}/anime/${id}/episodes?page=${page}`,
+    );
     if (primary.ok) {
       const j = primary.json as any;
       const episodes = (j.data || []).map((ep: any, idx: number) => {
@@ -277,9 +306,12 @@ export const getEpisodes: RequestHandler = async (req, res) => {
 
     // 2) Fallback: derive slug from Jikan title and try a single provider list via Consumet
     const infoRes = await fetchJson(`${JIKAN_BASE}/anime/${id}`);
-    const title = (infoRes.ok && (infoRes.json as any)?.data)
-      ? ((infoRes.json as any).data.title || (infoRes.json as any).data.title_english || (infoRes.json as any).data.title_japanese)
-      : null;
+    const title =
+      infoRes.ok && (infoRes.json as any)?.data
+        ? (infoRes.json as any).data.title ||
+          (infoRes.json as any).data.title_english ||
+          (infoRes.json as any).data.title_japanese
+        : null;
     if (title) {
       const slug = slugify(title);
       const providers = ["gogoanime", "zoro", "animepahe"];
@@ -287,16 +319,27 @@ export const getEpisodes: RequestHandler = async (req, res) => {
         const infoUrl = `https://api.consumet.org/anime/${p}/info/${slug}`;
         const c = await fetchJson(infoUrl, 8000, 0);
         if (c.ok) {
-          const arr = (c.json as any)?.episodes || (c.json as any)?.data?.episodes || (c.json as any)?.results || null;
+          const arr =
+            (c.json as any)?.episodes ||
+            (c.json as any)?.data?.episodes ||
+            (c.json as any)?.results ||
+            null;
           if (Array.isArray(arr) && arr.length > 0) {
             const episodes = arr.map((ep: any) => {
-              const number = ep.number ?? ep.episode ?? ep.ep ?? ep.index ?? null;
-              const title = ep.title || ep.name || ep.episodeTitle || ep.title_english || undefined;
+              const number =
+                ep.number ?? ep.episode ?? ep.ep ?? ep.index ?? null;
+              const title =
+                ep.title ||
+                ep.name ||
+                ep.episodeTitle ||
+                ep.title_english ||
+                undefined;
               const air_date = ep.air_date ?? ep.aired ?? ep.date ?? null;
               const eid = ep.id ?? `${id}-${number ?? "0"}`;
               return {
                 id: String(eid),
-                number: typeof number === "number" ? number : Number(number) || 0,
+                number:
+                  typeof number === "number" ? number : Number(number) || 0,
                 title,
                 air_date,
               };
@@ -307,7 +350,11 @@ export const getEpisodes: RequestHandler = async (req, res) => {
               page,
               has_next_page: total > page * perPage,
               last_visible_page: Math.max(1, Math.ceil(total / perPage)),
-              items: { count: Math.min(perPage, total - (page - 1) * perPage), total, per_page: perPage },
+              items: {
+                count: Math.min(perPage, total - (page - 1) * perPage),
+                total,
+                per_page: perPage,
+              },
             };
             const payload = { episodes, pagination };
             episodesCache[cacheKey] = { at: now, data: payload };
