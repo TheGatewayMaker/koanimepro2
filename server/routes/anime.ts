@@ -2,6 +2,10 @@ import { RequestHandler } from "express";
 
 const JIKAN_BASE = "https://api.jikan.moe/v4";
 
+// Simple in-memory cache for episodes to mitigate upstream rate limits
+const EPISODES_TTL_MS = 3 * 60 * 1000;
+const episodesCache: Record<string, { at: number; data: { episodes: any[]; pagination: any } }> = {};
+
 function mapAnime(a: any) {
   const images = a.images?.jpg || a.images?.webp || {};
   return {
@@ -145,23 +149,95 @@ export const getEpisodes: RequestHandler = async (req, res) => {
   try {
     const id = req.params.id;
     const page = Math.max(1, Number(req.query.page || 1) || 1);
-
-    const r = await fetch(`${JIKAN_BASE}/anime/${id}/episodes?page=${page}`);
-    if (!r.ok) {
-      return res.status(r.status).json({ episodes: [], pagination: null });
+    const cacheKey = `${id}:${page}`;
+    const now = Date.now();
+    const cached = episodesCache[cacheKey];
+    if (cached && now - cached.at < EPISODES_TTL_MS) {
+      return res.json(cached.data);
     }
-    const json = await r.json();
 
-    const episodes = (json.data || []).map((ep: any) => ({
-      id: String(ep.mal_id ?? `${id}-${ep.episode ?? ""}`),
-      number:
-        typeof ep.episode === "number" ? ep.episode : Number(ep.episode) || 0,
-      title: ep.title || ep.title_romanji || ep.title_japanese || undefined,
-      air_date: ep.aired || null,
-    }));
+    // Helper: fetch with timeout and simple 429 retry
+    async function fetchJson(url: string, timeoutMs = 8000, retries = 1) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const r = await fetch(url, { signal: controller.signal });
+        if (r.status === 429 && retries > 0) {
+          await new Promise((r) => setTimeout(r, 500));
+          return fetchJson(url, timeoutMs, retries - 1);
+        }
+        if (!r.ok) return { ok: false, status: r.status, json: null } as const;
+        const j = await r.json();
+        return { ok: true, status: r.status, json: j } as const;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
 
-    const pagination = json.pagination || null;
-    return res.json({ episodes, pagination });
+    // 1) Primary: Jikan episodes
+    const primary = await fetchJson(`${JIKAN_BASE}/anime/${id}/episodes?page=${page}`);
+    if (primary.ok) {
+      const j = primary.json as any;
+      const episodes = (j.data || []).map((ep: any) => ({
+        id: String(ep.mal_id ?? `${id}-${ep.episode ?? ""}`),
+        number:
+          typeof ep.episode === "number" ? ep.episode : Number(ep.episode) || 0,
+        title: ep.title || ep.title_romanji || ep.title_japanese || undefined,
+        air_date: ep.aired || null,
+      }));
+      const payload = { episodes, pagination: j.pagination || null };
+      // Cache even empty to avoid hammering the API
+      episodesCache[cacheKey] = { at: now, data: payload };
+      // If we have results, return immediately
+      if (episodes.length > 0) return res.json(payload);
+    }
+
+    // 2) Fallback: derive slug from Jikan title and try a single provider list via Consumet
+    const infoRes = await fetchJson(`${JIKAN_BASE}/anime/${id}`);
+    const title = (infoRes.ok && (infoRes.json as any)?.data)
+      ? ((infoRes.json as any).data.title || (infoRes.json as any).data.title_english || (infoRes.json as any).data.title_japanese)
+      : null;
+    if (title) {
+      const slug = slugify(title);
+      const providers = ["gogoanime", "zoro", "animepahe"];
+      for (const p of providers) {
+        const infoUrl = `https://api.consumet.org/anime/${p}/info/${slug}`;
+        const c = await fetchJson(infoUrl, 8000, 0);
+        if (c.ok) {
+          const arr = (c.json as any)?.episodes || (c.json as any)?.data?.episodes || (c.json as any)?.results || null;
+          if (Array.isArray(arr) && arr.length > 0) {
+            const episodes = arr.map((ep: any) => {
+              const number = ep.number ?? ep.episode ?? ep.ep ?? ep.index ?? null;
+              const title = ep.title || ep.name || ep.episodeTitle || ep.title_english || undefined;
+              const air_date = ep.air_date ?? ep.aired ?? ep.date ?? null;
+              const eid = ep.id ?? `${id}-${number ?? "0"}`;
+              return {
+                id: String(eid),
+                number: typeof number === "number" ? number : Number(number) || 0,
+                title,
+                air_date,
+              };
+            });
+            const perPage = 24;
+            const total = arr.length;
+            const pagination = {
+              page,
+              has_next_page: total > page * perPage,
+              last_visible_page: Math.max(1, Math.ceil(total / perPage)),
+              items: { count: Math.min(perPage, total - (page - 1) * perPage), total, per_page: perPage },
+            };
+            const payload = { episodes, pagination };
+            episodesCache[cacheKey] = { at: now, data: payload };
+            return res.json(payload);
+          }
+        }
+      }
+    }
+
+    // 3) No data
+    const empty = { episodes: [], pagination: null };
+    episodesCache[cacheKey] = { at: now, data: empty };
+    return res.json(empty);
   } catch (e: any) {
     res.status(500).json({ error: e?.message || "Episodes failed" });
   }
