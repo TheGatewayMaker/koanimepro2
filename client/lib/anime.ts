@@ -187,51 +187,18 @@ export async function fetchEpisodes(
   id: number,
   page = 1,
 ): Promise<EpisodesResponse> {
-  const ALT_BASE = "https://api3.anime-dexter-live.workers.dev";
-  // Try server endpoint first
   try {
     const res = await fetch(`/api/anime/episodes/${id}?page=${page}`);
-    if (res.ok) {
-      const data = await res.json();
-      return normalizeEpisodesResponse(data);
+    if (!res.ok) {
+      console.error("fetchEpisodes failed", res.status, await res.text().catch(() => ""));
+      return { episodes: [], pagination: null };
     }
-    console.warn("server episodes returned non-ok", res.status);
+    const data = await res.json();
+    return normalizeEpisodesResponse(data);
   } catch (e) {
-    console.warn("server episodes fetch failed", e);
+    console.error("fetchEpisodes error", e);
+    return { episodes: [], pagination: null };
   }
-
-  // Fallback: try dexter directly from client (CORS allowing)
-  try {
-    const dexterUrl = `${ALT_BASE}/anime/${id}/episodes${page > 1 ? `?page=${page}` : ""}`;
-    const r = await fetch(dexterUrl);
-    if (r.ok) {
-      const j = await r.json();
-      return normalizeEpisodesResponse({
-        episodes: j.data || j.results || j.episodes || j,
-      });
-    }
-    console.warn("dexter direct returned non-ok", r.status);
-  } catch (e) {
-    console.warn("dexter direct fetch failed", e);
-  }
-
-  // Final fallback: try Jikan directly
-  try {
-    const jikanUrl = `https://api.jikan.moe/v4/anime/${id}/episodes?page=${page}`;
-    const rj = await fetch(jikanUrl);
-    if (rj.ok) {
-      const j = await rj.json();
-      return normalizeEpisodesResponse({
-        episodes: j.data || j.episodes || [],
-        pagination: j.pagination || null,
-      });
-    }
-    console.warn("jikan direct returned non-ok", rj.status);
-  } catch (e) {
-    console.warn("jikan direct fetch failed", e);
-  }
-
-  return { episodes: [], pagination: null };
 }
 
 function normalizeEpisodesResponse(data: any): EpisodesResponse {
