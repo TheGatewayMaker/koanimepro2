@@ -142,161 +142,26 @@ export const getInfo: RequestHandler = async (req, res) => {
 };
 
 export const getEpisodes: RequestHandler = async (req, res) => {
-  const ALT_BASE = "https://api3.anime-dexter-live.workers.dev";
-
-  function fetchWithTimeout(url: string, opts: any = {}, timeout = 7000) {
-    const controller = new AbortController();
-    const idT = setTimeout(() => controller.abort(), timeout);
-    return fetch(url, { signal: controller.signal, ...opts }).finally(() =>
-      clearTimeout(idT),
-    );
-  }
-
-  async function tryFetchJson(url: string) {
-    try {
-      const r = await fetchWithTimeout(url, {}, 7000);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      return await r.json();
-    } catch (e) {
-      // propagate
-      throw e;
-    }
-  }
-
   try {
     const id = req.params.id;
-    const page = Number(req.query.page || 1);
+    const page = Math.max(1, Number(req.query.page || 1) || 1);
 
-    // 1) Try Consumet providers (use title->slug to lookup)
-    try {
-      const infoShort = await tryFetchJson(`${JIKAN_BASE}/anime/${id}`).catch(
-        () => null,
-      );
-      const title =
-        infoShort?.data?.title ||
-        infoShort?.data?.title_english ||
-        infoShort?.data?.title_japanese;
-      if (title) {
-        const slug = slugify(title);
-        const CONSUMET = "https://api.consumet.org";
-        const providers = ["gogoanime", "zoro", "animepahe"];
-        for (const p of providers) {
-          try {
-            const url = `${CONSUMET}/anime/${p}/info/${slug}`;
-            const jC = await tryFetchJson(url);
-            const arr =
-              jC?.episodes ||
-              jC?.results ||
-              jC?.data?.episodes ||
-              jC?.data ||
-              null;
-            if (Array.isArray(arr) && arr.length > 0) {
-              const episodes = arr.map((ep: any) => {
-                const number =
-                  ep.number ??
-                  ep.episode ??
-                  ep.ep ??
-                  ep.ep_num ??
-                  ep.index ??
-                  null;
-                const title =
-                  ep.title ||
-                  ep.name ||
-                  ep.episodeTitle ||
-                  ep.title_english ||
-                  null;
-                const air_date = ep.air_date ?? ep.aired ?? ep.date ?? null;
-                const eid = ep.id ?? ep.mal_id ?? `${id}-${number ?? "0"}`;
-                return {
-                  id: String(eid),
-                  number:
-                    typeof number === "number" ? number : Number(number) || 0,
-                  title: title || undefined,
-                  air_date,
-                };
-              });
-              // compute pagination details if available
-              const per_page =
-                jC?.pagination?.items?.per_page ||
-                jC?.pagination?.limit ||
-                jC?.meta?.perPage ||
-                24;
-              const total =
-                jC?.pagination?.items?.total ||
-                jC?.meta?.total ||
-                jC?.total ||
-                jC?.count ||
-                null;
-              const last_visible_page =
-                total && per_page
-                  ? Math.ceil(total / per_page)
-                  : Math.max(1, Math.ceil((arr?.length || 0) / per_page));
-              const pagination = {
-                page: jC?.pagination?.current_page || page,
-                has_next_page: !!(
-                  jC?.pagination?.has_next_page ||
-                  (total && per_page ? page * per_page < total : false)
-                ),
-                last_visible_page,
-              };
-              return res.json({ episodes, pagination });
-            }
-          } catch (e) {
-            // ignore provider errors
-          }
-        }
-      }
-    } catch (e) {
-      console.warn("consumet episodes fetch failed", String(e));
+    const r = await fetch(`${JIKAN_BASE}/anime/${id}/episodes?page=${page}`);
+    if (!r.ok) {
+      return res.status(r.status).json({ episodes: [], pagination: null });
     }
+    const json = await r.json();
 
-    // 2) Try dexter API with timeout/retries
-    try {
-      const jikanUrl = `${JIKAN_BASE}/anime/${id}/episodes?page=${page}`;
-      const json = await tryFetchJson(jikanUrl);
-      const episodes = (json.data || []).map((ep: any) => ({
-        id: String(ep.mal_id ?? `${id}-${ep.episode ?? ""}`),
-        number:
-          typeof ep.episode === "number" ? ep.episode : Number(ep.episode) || 0,
-        title: ep.title || ep.title_romanji || ep.title_japanese || undefined,
-        air_date: ep.aired || null,
-      }));
-      const pagination = json.pagination || null;
-      if (episodes.length > 0) return res.json({ episodes, pagination });
-    } catch (e) {
-      console.warn("jikan episodes fetch failed", String(e));
-    }
+    const episodes = (json.data || []).map((ep: any) => ({
+      id: String(ep.mal_id ?? `${id}-${ep.episode ?? ""}`),
+      number:
+        typeof ep.episode === "number" ? ep.episode : Number(ep.episode) || 0,
+      title: ep.title || ep.title_romanji || ep.title_japanese || undefined,
+      air_date: ep.aired || null,
+    }));
 
-    // 3) Fallback: attempt to fetch basic info and generate numbered episodes if episodes count available
-    try {
-      const infoUrl = `${JIKAN_BASE}/anime/${id}/full`;
-      const inf = await tryFetchJson(infoUrl).catch(() => null);
-      const epCount = inf?.data?.episodes ?? null;
-      if (typeof epCount === "number" && epCount > 0) {
-        const max = Math.min(epCount, 200);
-        const episodes = Array.from({ length: max }).map((_, i) => ({
-          id: `${id}-${i + 1}`,
-          number: i + 1,
-          title: undefined,
-          air_date: null,
-        }));
-        const per_page = 24;
-        const last_visible_page = Math.ceil(epCount / per_page);
-        return res.json({
-          episodes,
-          pagination: {
-            page: 1,
-            has_next_page: epCount > max,
-            last_visible_page,
-          },
-        });
-      }
-    } catch (e) {
-      console.warn("fallback info fetch failed", String(e));
-    }
-
-    // Nothing available
-    return res.json({ episodes: [], pagination: null });
+    const pagination = json.pagination || null;
+    return res.json({ episodes, pagination });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || "Episodes failed" });
   }
