@@ -237,15 +237,16 @@ export default function AnimePage() {
                   <button
                     key={ep.id + "-" + ep.number}
                     className="rounded border px-3 py-2 text-left text-sm hover:bg-accent"
-                    onClick={() =>
-                      toast("Streaming not available in-app", {
-                        description:
-                          streams.length > 0
-                            ? "Use the streaming links above to watch legally."
-                            : "Streaming providers not reported for this title.",
-                        duration: 3000,
-                      })
-                    }
+                    onClick={() => {
+                      if (streams.length > 0) {
+                        window.open(streams[0].url, "_blank", "noreferrer");
+                      } else {
+                        toast("Streaming not available", {
+                          description: "Streaming providers not reported for this title.",
+                          duration: 2500,
+                        });
+                      }
+                    }}
                   >
                     <div className="font-medium">Episode {ep.number}</div>
                     {ep.title && (
