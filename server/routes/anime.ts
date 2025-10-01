@@ -167,7 +167,24 @@ export const getEpisodes: RequestHandler = async (req, res) => {
     const id = req.params.id;
     const page = Number(req.query.page || 1);
 
-    // 1) Try Consumet providers (use title->slug to lookup)
+    // 1) Jikan episodes (primary - reliable and provides pagination)
+    try {
+      const jikanUrl = `${JIKAN_BASE}/anime/${id}/episodes?page=${page}`;
+      const json = await tryFetchJson(jikanUrl);
+      const episodes = (json.data || []).map((ep: any) => ({
+        id: String(ep.mal_id ?? `${id}-${ep.episode ?? ""}`),
+        number:
+          typeof ep.episode === "number" ? ep.episode : Number(ep.episode) || 0,
+        title: ep.title || ep.title_romanji || ep.title_japanese || undefined,
+        air_date: ep.aired || null,
+      }));
+      const pagination = json.pagination || null;
+      if (episodes.length > 0) return res.json({ episodes, pagination });
+    } catch (e) {
+      console.warn("jikan episodes fetch failed", String(e));
+    }
+
+    // 2) Try Consumet providers (use title->slug to lookup)
     try {
       const infoShort = await tryFetchJson(`${JIKAN_BASE}/anime/${id}`).catch(
         () => null,
@@ -250,7 +267,7 @@ export const getEpisodes: RequestHandler = async (req, res) => {
       console.warn("consumet episodes fetch failed", String(e));
     }
 
-    // 2) Dexter API fallback
+    // 3) Dexter API fallback
     try {
       const dexterUrl = `${ALT_BASE}/anime/${id}/episodes${page > 1 ? `?page=${page}` : ""}`;
       const j = await tryFetchJson(dexterUrl);
@@ -270,27 +287,12 @@ export const getEpisodes: RequestHandler = async (req, res) => {
             air_date,
           };
         });
-        return res.json({ episodes, pagination: null });
+        // try to infer pagination if available
+        const last_visible_page = Math.max(1, Math.ceil((arr?.length || 0) / 24));
+        return res.json({ episodes, pagination: { page, has_next_page: false, last_visible_page } });
       }
     } catch (e) {
       console.warn("dexter episodes fetch failed", String(e));
-    }
-
-    // 3) Jikan episodes
-    try {
-      const jikanUrl = `${JIKAN_BASE}/anime/${id}/episodes?page=${page}`;
-      const json = await tryFetchJson(jikanUrl);
-      const episodes = (json.data || []).map((ep: any) => ({
-        id: String(ep.mal_id ?? `${id}-${ep.episode ?? ""}`),
-        number:
-          typeof ep.episode === "number" ? ep.episode : Number(ep.episode) || 0,
-        title: ep.title || ep.title_romanji || ep.title_japanese || undefined,
-        air_date: ep.aired || null,
-      }));
-      const pagination = json.pagination || null;
-      if (episodes.length > 0) return res.json({ episodes, pagination });
-    } catch (e) {
-      console.warn("jikan episodes fetch failed", String(e));
     }
 
     // 4) Fallback: attempt to fetch basic info and generate numbered episodes if episodes count available
