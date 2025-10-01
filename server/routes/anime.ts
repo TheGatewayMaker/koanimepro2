@@ -250,7 +250,33 @@ export const getEpisodes: RequestHandler = async (req, res) => {
       console.warn("consumet episodes fetch failed", String(e));
     }
 
-    // 2) Try dexter API with timeout/retries
+    // 2) Dexter API fallback
+    try {
+      const dexterUrl = `${ALT_BASE}/anime/${id}/episodes${page > 1 ? `?page=${page}` : ""}`;
+      const j = await tryFetchJson(dexterUrl);
+      const arr = j?.data || j?.results || j?.episodes || j;
+      if (Array.isArray(arr) && arr.length > 0) {
+        const episodes = arr.map((ep: any) => {
+          const number =
+            ep.number ?? ep.episode ?? ep.episode_number ?? ep.ep ?? ep.ep_num ?? ep.mal_id ?? null;
+          const title =
+            ep.title || ep.name || ep.episodeTitle || ep.title_english || null;
+          const air_date = ep.air_date ?? ep.aired ?? ep.date ?? null;
+          const eid = ep.id ?? ep.mal_id ?? `${id}-${number ?? "0"}`;
+          return {
+            id: String(eid),
+            number: typeof number === "number" ? number : Number(number) || 0,
+            title: title || undefined,
+            air_date,
+          };
+        });
+        return res.json({ episodes, pagination: null });
+      }
+    } catch (e) {
+      console.warn("dexter episodes fetch failed", String(e));
+    }
+
+    // 3) Jikan episodes
     try {
       const jikanUrl = `${JIKAN_BASE}/anime/${id}/episodes?page=${page}`;
       const json = await tryFetchJson(jikanUrl);
