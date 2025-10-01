@@ -203,28 +203,23 @@ export async function fetchEpisodes(
 }
 
 function normalizeEpisodesResponse(data: any): EpisodesResponse {
-  const episodes = (data.episodes || data.results || data.data || []).map(
-    (ep: any) => {
-      const number =
-        ep.number ??
-        ep.episode ??
-        ep.episode_number ??
-        ep.ep ??
-        ep.ep_num ??
-        ep.mal_id ??
-        null;
-      const title =
-        ep.title || ep.name || ep.episodeTitle || ep.title_english || undefined;
-      const air_date = ep.air_date ?? ep.aired ?? ep.date ?? null;
-      const id = ep.id ?? ep.mal_id ?? `${ep.mal_id ?? ""}-${number ?? ""}`;
-      return {
-        id: String(id),
-        number: typeof number === "number" ? number : Number(number) || 0,
-        title,
-        air_date,
-      };
-    },
-  );
+  const base = data.episodes || data.results || data.data || [];
+  const episodes = base.map((ep: any, idx: number) => {
+    const number =
+      ep.number ?? ep.episode ?? ep.episode_number ?? ep.ep ?? ep.ep_num ?? null;
+    const title =
+      ep.title || ep.name || ep.episodeTitle || ep.title_english || undefined;
+    const air_date = ep.air_date ?? ep.aired ?? ep.date ?? null;
+    const n = typeof number === "number" ? number : Number(number) || 0;
+    const finalNum = n > 0 ? n : idx + 1;
+    const id = ep.id ?? ep.mal_id ?? `${ep.mal_id ?? ""}-${finalNum}`;
+    return {
+      id: String(id),
+      number: finalNum,
+      title,
+      air_date,
+    };
+  });
 
   // Normalize pagination to include last_visible_page if possible
   const pagination = data.pagination || data.meta || null;
