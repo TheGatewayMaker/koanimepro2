@@ -2,18 +2,48 @@ import { RequestHandler } from "express";
 
 const JIKAN_BASE = "https://api.jikan.moe/v4";
 
+// Simple in-memory cache for episodes to mitigate upstream rate limits
+const EPISODES_TTL_MS = 3 * 60 * 1000;
+const episodesCache: Record<
+  string,
+  { at: number; data: { episodes: any[]; pagination: any } }
+> = {};
+
+function normalizeBaseTitle(title: string) {
+  let s = String(title || "").trim();
+  s = s.replace(/\s*-\s*(Season|Cour|Part)\s*\d+$/i, "");
+  s = s.replace(/\s*\(\s*(Season|Cour|Part)\s*\d+\s*\)$/i, "");
+  s = s.replace(/\s*\b(\d+)(st|nd|rd|th)\s+Season\b.*$/i, "");
+  s = s.replace(/\s*\bSeason\s+\d+(?:\s*Part\s*\d+)?\b.*$/i, "");
+  s = s.replace(/\s*\bFinal Season(?:\s*Part\s*\d+)?\b.*$/i, "");
+  s = s.replace(/\s+(?:II|III|IV|V|VI|VII|VIII|IX|X)$/i, "");
+  s = s.replace(/\s+\d+$/i, "");
+  return s.trim();
+}
+
 function mapAnime(a: any) {
   const images = a.images?.jpg || a.images?.webp || {};
+  const originalTitle = a.title || a.title_english || a.title_japanese || "";
+  const baseTitle = normalizeBaseTitle(originalTitle);
+  const nowYear = new Date().getFullYear();
+  const year = a.year ?? a.aired?.prop?.from?.year ?? null;
+  const airing = a.airing === true || a.status === "Currently Airing";
+  const seasonMarker =
+    /(season\s*\d+|part\s*\d+|cour\s*\d+|final\s*season|\bii\b|\biii\b|\biv\b|\bv\b|\bvi\b|\bvii\b|\bviii\b|\bix\b|\bx\b|\d+\s*$)/i.test(
+      originalTitle,
+    );
+  const isNewSeason = seasonMarker && (airing || year === nowYear);
   return {
     id: a.mal_id,
-    title: a.title || a.title_english || a.title_japanese,
+    title: baseTitle,
     image: images.large_image_url || images.image_url || images.small_image_url,
     type: a.type || undefined,
-    year: a.year ?? a.aired?.prop?.from?.year ?? null,
+    year,
     rating: typeof a.score === "number" ? a.score : null,
-    subDub: "SUB", // Jikan doesn't provide sub/dub; default to SUB
+    subDub: "SUB",
     genres: Array.isArray(a.genres) ? a.genres.map((g: any) => g.name) : [],
     synopsis: a.synopsis || "",
+    isNewSeason,
   };
 }
 
@@ -70,10 +100,79 @@ export const getInfo: RequestHandler = async (req, res) => {
       return json.data ?? null;
     }
 
+    function pickRelation(rel: any) {
+      if (!rel || !Array.isArray(rel.entry)) return null;
+      const tv = rel.entry.find((x: any) => x.type === "TV");
+      const chosen = tv || rel.entry[0];
+      return chosen ? { id: chosen.mal_id, title: chosen.name } : null;
+    }
+
+    async function buildSeasonsChain(
+      startData: any,
+    ): Promise<{ ids: number[]; titles: Record<number, string> }> {
+      const seen = new Set<number>();
+      const titles: Record<number, string> = {};
+      let current = startData;
+      let currentId = Number(current.mal_id);
+      titles[currentId] =
+        current.title || current.title_english || current.title_japanese;
+
+      // Walk back to base via prequels
+      const back: number[] = [];
+      let node = current;
+      for (let i = 0; i < 8; i++) {
+        const preRel = node.relations?.find?.(
+          (r: any) => r.relation === "Prequel",
+        );
+        const pre = pickRelation(preRel);
+        if (!pre || seen.has(pre.id)) break;
+        seen.add(pre.id);
+        back.push(pre.id);
+        const full = await fetchByMal(String(pre.id));
+        if (!full) break;
+        titles[pre.id] =
+          full.title || full.title_english || full.title_japanese;
+        node = full;
+      }
+
+      // Base is last back or current
+      const chain: number[] = [...back.reverse(), currentId];
+
+      // Walk forward from current/base via sequels
+      node = current;
+      for (let i = 0; i < 8; i++) {
+        const seqRel = node.relations?.find?.(
+          (r: any) => r.relation === "Sequel",
+        );
+        const seq = pickRelation(seqRel);
+        if (!seq || seen.has(seq.id)) break;
+        seen.add(seq.id);
+        const full = await fetchByMal(String(seq.id));
+        if (!full) break;
+        titles[seq.id] =
+          full.title || full.title_english || full.title_japanese;
+        chain.push(seq.id);
+        node = full;
+      }
+
+      return { ids: chain, titles };
+    }
+
     // If numeric id provided, try Jikan directly
     if (/^\d+$/.test(raw)) {
       const data = await fetchByMal(raw);
-      if (data) return res.json(mapAnime(data));
+      if (data) {
+        const base = mapAnime(data);
+        const chain = await buildSeasonsChain(data).catch(() => null);
+        const seasons = chain
+          ? chain.ids.map((id, i) => ({
+              id,
+              number: i + 1,
+              title: normalizeBaseTitle(chain.titles[id] || ""),
+            }))
+          : [];
+        return res.json({ ...base, seasons });
+      }
     }
 
     // Not numeric or initial fetch failed: try searching Jikan by title (replace hyphens with spaces)
@@ -109,7 +208,18 @@ export const getInfo: RequestHandler = async (req, res) => {
           // If we can find mal_id, fetch full from Jikan
           if (ep) {
             const data = await fetchByMal(String(ep));
-            if (data) return res.json(mapAnime(data));
+            if (data) {
+              const base = mapAnime(data);
+              const chain = await buildSeasonsChain(data).catch(() => null);
+              const seasons = chain
+                ? chain.ids.map((id, i) => ({
+                    id,
+                    number: i + 1,
+                    title: normalizeBaseTitle(chain.titles[id] || ""),
+                  }))
+                : [];
+              return res.json({ ...base, seasons });
+            }
           }
           // Otherwise try to map consumet info fields
           const title = j?.title || j?.data?.title || j?.name || null;
@@ -117,7 +227,7 @@ export const getInfo: RequestHandler = async (req, res) => {
           if (title) {
             return res.json({
               id: j?.mal_id || null,
-              title,
+              title: normalizeBaseTitle(title),
               image,
               type: j?.type || null,
               year: j?.year || null,
@@ -125,6 +235,7 @@ export const getInfo: RequestHandler = async (req, res) => {
               subDub: null,
               genres: j?.genres || [],
               synopsis: j?.description || j?.data?.description || null,
+              seasons: [],
             });
           }
         } catch (e) {
@@ -142,161 +253,121 @@ export const getInfo: RequestHandler = async (req, res) => {
 };
 
 export const getEpisodes: RequestHandler = async (req, res) => {
-  const ALT_BASE = "https://api3.anime-dexter-live.workers.dev";
-
-  function fetchWithTimeout(url: string, opts: any = {}, timeout = 7000) {
-    const controller = new AbortController();
-    const idT = setTimeout(() => controller.abort(), timeout);
-    return fetch(url, { signal: controller.signal, ...opts }).finally(() =>
-      clearTimeout(idT),
-    );
-  }
-
-  async function tryFetchJson(url: string) {
-    try {
-      const r = await fetchWithTimeout(url, {}, 7000);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      return await r.json();
-    } catch (e) {
-      // propagate
-      throw e;
-    }
-  }
-
   try {
     const id = req.params.id;
-    const page = Number(req.query.page || 1);
+    const page = Math.max(1, Number(req.query.page || 1) || 1);
+    const cacheKey = `${id}:${page}`;
+    const now = Date.now();
+    const cached = episodesCache[cacheKey];
+    if (cached && now - cached.at < EPISODES_TTL_MS) {
+      return res.json(cached.data);
+    }
 
-    // 1) Try Consumet providers (use title->slug to lookup)
-    try {
-      const infoShort = await tryFetchJson(`${JIKAN_BASE}/anime/${id}`).catch(
-        () => null,
-      );
-      const title =
-        infoShort?.data?.title ||
-        infoShort?.data?.title_english ||
-        infoShort?.data?.title_japanese;
-      if (title) {
-        const slug = slugify(title);
-        const CONSUMET = "https://api.consumet.org";
-        const providers = ["gogoanime", "zoro", "animepahe"];
-        for (const p of providers) {
-          try {
-            const url = `${CONSUMET}/anime/${p}/info/${slug}`;
-            const jC = await tryFetchJson(url);
-            const arr =
-              jC?.episodes ||
-              jC?.results ||
-              jC?.data?.episodes ||
-              jC?.data ||
-              null;
-            if (Array.isArray(arr) && arr.length > 0) {
-              const episodes = arr.map((ep: any) => {
-                const number =
-                  ep.number ??
-                  ep.episode ??
-                  ep.ep ??
-                  ep.ep_num ??
-                  ep.index ??
-                  null;
-                const title =
-                  ep.title ||
-                  ep.name ||
-                  ep.episodeTitle ||
-                  ep.title_english ||
-                  null;
-                const air_date = ep.air_date ?? ep.aired ?? ep.date ?? null;
-                const eid = ep.id ?? ep.mal_id ?? `${id}-${number ?? "0"}`;
-                return {
-                  id: String(eid),
-                  number:
-                    typeof number === "number" ? number : Number(number) || 0,
-                  title: title || undefined,
-                  air_date,
-                };
-              });
-              // compute pagination details if available
-              const per_page =
-                jC?.pagination?.items?.per_page ||
-                jC?.pagination?.limit ||
-                jC?.meta?.perPage ||
-                24;
-              const total =
-                jC?.pagination?.items?.total ||
-                jC?.meta?.total ||
-                jC?.total ||
-                jC?.count ||
-                null;
-              const last_visible_page =
-                total && per_page
-                  ? Math.ceil(total / per_page)
-                  : Math.max(1, Math.ceil((arr?.length || 0) / per_page));
-              const pagination = {
-                page: jC?.pagination?.current_page || page,
-                has_next_page: !!(
-                  jC?.pagination?.has_next_page ||
-                  (total && per_page ? page * per_page < total : false)
-                ),
-                last_visible_page,
+    // Helper: fetch with timeout and simple 429 retry
+    async function fetchJson(url: string, timeoutMs = 8000, retries = 1) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const r = await fetch(url, { signal: controller.signal });
+        if (r.status === 429 && retries > 0) {
+          await new Promise((r) => setTimeout(r, 500));
+          return fetchJson(url, timeoutMs, retries - 1);
+        }
+        if (!r.ok) return { ok: false, status: r.status, json: null } as const;
+        const j = await r.json();
+        return { ok: true, status: r.status, json: j } as const;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    // 1) Primary: Jikan episodes
+    const primary = await fetchJson(
+      `${JIKAN_BASE}/anime/${id}/episodes?page=${page}`,
+    );
+    if (primary.ok) {
+      const j = primary.json as any;
+      const episodes = (j.data || []).map((ep: any, idx: number) => {
+        const numRaw = ep.episode;
+        const num = typeof numRaw === "number" ? numRaw : Number(numRaw) || 0;
+        return {
+          id: String(ep.mal_id ?? `${id}-${num || idx + 1}`),
+          number: num > 0 ? num : idx + 1,
+          title: ep.title || ep.title_romanji || ep.title_japanese || undefined,
+          air_date: ep.aired || null,
+        };
+      });
+      const payload = { episodes, pagination: j.pagination || null };
+      // Cache even empty to avoid hammering the API
+      episodesCache[cacheKey] = { at: now, data: payload };
+      // If we have results, return immediately
+      if (episodes.length > 0) return res.json(payload);
+    }
+
+    // 2) Fallback: derive slug from Jikan title and try a single provider list via Consumet
+    const infoRes = await fetchJson(`${JIKAN_BASE}/anime/${id}`);
+    const title =
+      infoRes.ok && (infoRes.json as any)?.data
+        ? (infoRes.json as any).data.title ||
+          (infoRes.json as any).data.title_english ||
+          (infoRes.json as any).data.title_japanese
+        : null;
+    if (title) {
+      const slug = slugify(title);
+      const providers = ["gogoanime", "zoro", "animepahe"];
+      for (const p of providers) {
+        const infoUrl = `https://api.consumet.org/anime/${p}/info/${slug}`;
+        const c = await fetchJson(infoUrl, 8000, 0);
+        if (c.ok) {
+          const arr =
+            (c.json as any)?.episodes ||
+            (c.json as any)?.data?.episodes ||
+            (c.json as any)?.results ||
+            null;
+          if (Array.isArray(arr) && arr.length > 0) {
+            const episodes = arr.map((ep: any) => {
+              const number =
+                ep.number ?? ep.episode ?? ep.ep ?? ep.index ?? null;
+              const title =
+                ep.title ||
+                ep.name ||
+                ep.episodeTitle ||
+                ep.title_english ||
+                undefined;
+              const air_date = ep.air_date ?? ep.aired ?? ep.date ?? null;
+              const eid = ep.id ?? `${id}-${number ?? "0"}`;
+              return {
+                id: String(eid),
+                number:
+                  typeof number === "number" ? number : Number(number) || 0,
+                title,
+                air_date,
               };
-              return res.json({ episodes, pagination });
-            }
-          } catch (e) {
-            // ignore provider errors
+            });
+            const perPage = 24;
+            const total = arr.length;
+            const pagination = {
+              page,
+              has_next_page: total > page * perPage,
+              last_visible_page: Math.max(1, Math.ceil(total / perPage)),
+              items: {
+                count: Math.min(perPage, total - (page - 1) * perPage),
+                total,
+                per_page: perPage,
+              },
+            };
+            const payload = { episodes, pagination };
+            episodesCache[cacheKey] = { at: now, data: payload };
+            return res.json(payload);
           }
         }
       }
-    } catch (e) {
-      console.warn("consumet episodes fetch failed", String(e));
     }
 
-    // 2) Try dexter API with timeout/retries
-    try {
-      const jikanUrl = `${JIKAN_BASE}/anime/${id}/episodes?page=${page}`;
-      const json = await tryFetchJson(jikanUrl);
-      const episodes = (json.data || []).map((ep: any) => ({
-        id: String(ep.mal_id ?? `${id}-${ep.episode ?? ""}`),
-        number:
-          typeof ep.episode === "number" ? ep.episode : Number(ep.episode) || 0,
-        title: ep.title || ep.title_romanji || ep.title_japanese || undefined,
-        air_date: ep.aired || null,
-      }));
-      const pagination = json.pagination || null;
-      if (episodes.length > 0) return res.json({ episodes, pagination });
-    } catch (e) {
-      console.warn("jikan episodes fetch failed", String(e));
-    }
-
-    // 3) Fallback: attempt to fetch basic info and generate numbered episodes if episodes count available
-    try {
-      const infoUrl = `${JIKAN_BASE}/anime/${id}/full`;
-      const inf = await tryFetchJson(infoUrl).catch(() => null);
-      const epCount = inf?.data?.episodes ?? null;
-      if (typeof epCount === "number" && epCount > 0) {
-        const max = Math.min(epCount, 200);
-        const episodes = Array.from({ length: max }).map((_, i) => ({
-          id: `${id}-${i + 1}`,
-          number: i + 1,
-          title: undefined,
-          air_date: null,
-        }));
-        const per_page = 24;
-        const last_visible_page = Math.ceil(epCount / per_page);
-        return res.json({
-          episodes,
-          pagination: {
-            page: 1,
-            has_next_page: epCount > max,
-            last_visible_page,
-          },
-        });
-      }
-    } catch (e) {
-      console.warn("fallback info fetch failed", String(e));
-    }
-
-    // Nothing available
-    return res.json({ episodes: [], pagination: null });
+    // 3) No data
+    const empty = { episodes: [], pagination: null };
+    episodesCache[cacheKey] = { at: now, data: empty };
+    return res.json(empty);
   } catch (e: any) {
     res.status(500).json({ error: e?.message || "Episodes failed" });
   }

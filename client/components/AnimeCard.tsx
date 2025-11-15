@@ -9,6 +9,7 @@ export interface AnimeSummary {
   rating?: number | null; // 0-10
   subDub?: "SUB" | "DUB" | "SUB/DUB" | null;
   genres?: string[];
+  isNewSeason?: boolean;
 }
 
 export function AnimeCard({ anime }: { anime: AnimeSummary }) {
@@ -39,9 +40,14 @@ export function AnimeCard({ anime }: { anime: AnimeSummary }) {
         <div className="text-xs text-foreground/60">
           {anime.type ?? ""} {anime.year ? `• ${anime.year}` : ""}
         </div>
-        {anime.genres && anime.genres.length > 0 && (
+        {(anime.genres && anime.genres.length > 0) || anime.isNewSeason ? (
           <div className="flex flex-wrap gap-1">
-            {anime.genres.slice(0, 3).map((g) => (
+            {anime.isNewSeason && (
+              <span className="rounded bg-yellow-400/90 px-1.5 py-0.5 text-[10px] font-semibold text-black">
+                New Season
+              </span>
+            )}
+            {anime.genres?.slice(0, 3).map((g) => (
               <span
                 key={g}
                 className="rounded bg-accent px-1.5 py-0.5 text-[10px] text-accent-foreground/80"
@@ -50,7 +56,7 @@ export function AnimeCard({ anime }: { anime: AnimeSummary }) {
               </span>
             ))}
           </div>
-        )}
+        ) : null}
       </div>
     </Link>
   );

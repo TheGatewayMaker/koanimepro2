@@ -15,9 +15,9 @@ export default function AnimePage() {
   const params = useParams();
   const id = Number(params.id);
   const [info, setInfo] = useState<ApiAnimeSummary | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
   const [episodes, setEpisodes] = useState<EpisodeItem[]>([]);
   const [episodesPagination, setEpisodesPagination] = useState<any>(null);
-  const [seasonPage, setSeasonPage] = useState<number>(1); // default season 1
   const [streams, setStreams] = useState<StreamLink[]>([]);
   const [loadingInfo, setLoadingInfo] = useState(true);
   const [loadingEpisodes, setLoadingEpisodes] = useState(true);
@@ -26,22 +26,30 @@ export default function AnimePage() {
     (async () => {
       setLoadingInfo(true);
       try {
-        const [i, s] = await Promise.all([
-          fetchAnimeInfo(id),
-          fetchStreams(id).catch(() => []),
-        ]);
+        const i = await fetchAnimeInfo(id);
         if (!i) {
           toast("Failed to load anime info", {
             description: "Could not fetch anime details from the API.",
           });
+          setInfo(null);
+          setSelectedId(id);
+          setStreams([]);
+        } else {
+          setInfo(i);
+          const baseSeason =
+            i.seasons && i.seasons.length > 0 ? i.seasons[0].id : id;
+          setSelectedId(baseSeason);
+          const s = await fetchStreams(baseSeason).catch(() => []);
+          setStreams(s || []);
         }
-        setInfo(i);
-        setStreams(s || []);
       } catch (e) {
         console.error(e);
         toast("Network error", {
           description: "Failed to fetch anime data. Please try again later.",
         });
+        setInfo(null);
+        setSelectedId(id);
+        setStreams([]);
       } finally {
         setLoadingInfo(false);
       }
@@ -49,10 +57,11 @@ export default function AnimePage() {
   }, [id]);
 
   useEffect(() => {
+    if (!selectedId) return;
     (async () => {
       setLoadingEpisodes(true);
       try {
-        const resp = await fetchEpisodes(id, seasonPage);
+        const resp = await fetchEpisodes(selectedId, 1);
         if (!resp || !Array.isArray(resp.episodes)) {
           toast("Failed to load episodes", {
             description: "Could not fetch episodes for this season.",
@@ -74,10 +83,16 @@ export default function AnimePage() {
         setLoadingEpisodes(false);
       }
     })();
-  }, [id, seasonPage]);
+  }, [selectedId]);
 
   const banner = useMemo(() => info?.image ?? "", [info]);
   const loading = loadingInfo || loadingEpisodes;
+  const seasons = info?.seasons || [];
+  const currentSeasonIndex = useMemo(() => {
+    if (!seasons || !selectedId) return 0;
+    const idx = seasons.findIndex((s) => s.id === selectedId);
+    return idx >= 0 ? idx : 0;
+  }, [seasons, selectedId]);
 
   return (
     <Layout>
@@ -96,30 +111,30 @@ export default function AnimePage() {
       ) : info || episodes.length > 0 ? (
         <div>
           {info && (
-            <div className="relative">
-              <div className="absolute inset-0 -z-10">
+            <section className="relative overflow-hidden">
+              <div className="relative h-48 md:h-56 lg:h-64 w-full">
                 <img
                   src={banner}
                   alt="banner"
-                  className="h-full w-full object-cover opacity-30 blur-sm"
+                  className="h-full w-full object-cover opacity-40"
                 />
-                <div className="absolute inset-0 bg-gradient-to-b from-background/30 to-background" />
+                <div className="absolute inset-0 bg-gradient-to-b from-background/10 via-background/30 to-background" />
               </div>
-              <div className="container mx-auto px-4 py-6 md:py-10">
+              <div className="container mx-auto px-4 py-4 md:py-6">
                 <div className="flex flex-col gap-6 md:flex-row">
                   <img
                     src={info.image}
                     alt={info.title}
-                    className="h-[300px] w-[220px] rounded-md border object-cover"
+                    className="h-[220px] w-[170px] rounded-md border object-cover"
                   />
                   <div className="flex-1">
-                    <h1 className="text-2xl font-bold md:text-4xl">
+                    <h1 className="text-xl font-bold md:text-3xl">
                       {info.title}
                     </h1>
                     <div className="mt-2 text-sm text-foreground/70">
                       {info.type} {info.year ? `• ${info.year}` : ""}
                       {info.rating != null && (
-                        <span className="ml-2 rounded bg-black/30 px-2 py-0.5 text-xs">
+                        <span className="ml-2 rounded bg-black/20 px-2 py-0.5 text-xs">
                           ⭐ {info.rating.toFixed(1)}
                         </span>
                       )}
@@ -144,7 +159,7 @@ export default function AnimePage() {
                   </div>
                 </div>
               </div>
-            </div>
+            </section>
           )}
 
           <div className="container mx-auto px-4 pb-10">
@@ -174,28 +189,21 @@ export default function AnimePage() {
                 <label className="text-sm font-medium">Season</label>
                 <div className="relative inline-block">
                   <select
-                    value={seasonPage}
-                    onChange={(e) => setSeasonPage(Number(e.target.value))}
+                    value={selectedId ?? undefined}
+                    onChange={(e) => setSelectedId(Number(e.target.value))}
                     className="appearance-none rounded-md border bg-background px-4 py-2 pr-8 text-sm transition-shadow duration-150 hover:shadow-sm focus:shadow-md focus:outline-none"
                     aria-label="Select season"
                   >
-                    {(() => {
-                      const last =
-                        episodesPagination?.last_visible_page ??
-                        Math.max(
-                          1,
-                          Math.ceil(
-                            ((episodesPagination?.items?.total as number) ||
-                              episodes.length) / 24,
-                          ),
-                        );
-                      const count = Math.max(1, Number(last || 1));
-                      return Array.from({ length: count }).map((_, i) => (
-                        <option key={i} value={i + 1}>
-                          {`Season ${i + 1}`}
-                        </option>
-                      ));
-                    })()}
+                    {seasons.length > 0 ? (
+                      seasons.map((s, i) => (
+                        <option
+                          key={s.id}
+                          value={s.id}
+                        >{`Season ${i + 1}`}</option>
+                      ))
+                    ) : (
+                      <option value={selectedId ?? id}>Season 1</option>
+                    )}
                   </select>
                   <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2">
                     <svg
@@ -233,15 +241,17 @@ export default function AnimePage() {
                   <button
                     key={ep.id + "-" + ep.number}
                     className="rounded border px-3 py-2 text-left text-sm hover:bg-accent"
-                    onClick={() =>
-                      toast("Streaming not available in-app", {
-                        description:
-                          streams.length > 0
-                            ? "Use the streaming links above to watch legally."
-                            : "Streaming providers not reported for this title.",
-                        duration: 3000,
-                      })
-                    }
+                    onClick={() => {
+                      if (streams.length > 0) {
+                        window.open(streams[0].url, "_blank", "noreferrer");
+                      } else {
+                        toast("Streaming not available", {
+                          description:
+                            "Streaming providers not reported for this title.",
+                          duration: 2500,
+                        });
+                      }
+                    }}
                   >
                     <div className="font-medium">Episode {ep.number}</div>
                     {ep.title && (

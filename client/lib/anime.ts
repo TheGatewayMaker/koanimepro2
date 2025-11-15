@@ -8,6 +8,8 @@ export interface ApiAnimeSummary {
   subDub?: "SUB" | "DUB" | "SUB/DUB" | null;
   genres?: string[];
   synopsis?: string;
+  seasons?: { id: number; number: number; title?: string }[];
+  isNewSeason?: boolean;
 }
 
 export async function fetchTrending(): Promise<ApiAnimeSummary[]> {
@@ -187,76 +189,42 @@ export async function fetchEpisodes(
   id: number,
   page = 1,
 ): Promise<EpisodesResponse> {
-  const ALT_BASE = "https://api3.anime-dexter-live.workers.dev";
-  // Try server endpoint first
   try {
     const res = await fetch(`/api/anime/episodes/${id}?page=${page}`);
     if (res.ok) {
       const data = await res.json();
       return normalizeEpisodesResponse(data);
     }
-    console.warn("server episodes returned non-ok", res.status);
+    console.error("episodes endpoint returned", res.status);
   } catch (e) {
-    console.warn("server episodes fetch failed", e);
+    console.error("episodes fetch failed", e);
   }
-
-  // Fallback: try dexter directly from client (CORS allowing)
-  try {
-    const dexterUrl = `${ALT_BASE}/anime/${id}/episodes${page > 1 ? `?page=${page}` : ""}`;
-    const r = await fetch(dexterUrl);
-    if (r.ok) {
-      const j = await r.json();
-      return normalizeEpisodesResponse({
-        episodes: j.data || j.results || j.episodes || j,
-      });
-    }
-    console.warn("dexter direct returned non-ok", r.status);
-  } catch (e) {
-    console.warn("dexter direct fetch failed", e);
-  }
-
-  // Final fallback: try Jikan directly
-  try {
-    const jikanUrl = `https://api.jikan.moe/v4/anime/${id}/episodes?page=${page}`;
-    const rj = await fetch(jikanUrl);
-    if (rj.ok) {
-      const j = await rj.json();
-      return normalizeEpisodesResponse({
-        episodes: j.data || j.episodes || [],
-        pagination: j.pagination || null,
-      });
-    }
-    console.warn("jikan direct returned non-ok", rj.status);
-  } catch (e) {
-    console.warn("jikan direct fetch failed", e);
-  }
-
   return { episodes: [], pagination: null };
 }
 
 function normalizeEpisodesResponse(data: any): EpisodesResponse {
-  const episodes = (data.episodes || data.results || data.data || []).map(
-    (ep: any) => {
-      const number =
-        ep.number ??
-        ep.episode ??
-        ep.episode_number ??
-        ep.ep ??
-        ep.ep_num ??
-        ep.mal_id ??
-        null;
-      const title =
-        ep.title || ep.name || ep.episodeTitle || ep.title_english || undefined;
-      const air_date = ep.air_date ?? ep.aired ?? ep.date ?? null;
-      const id = ep.id ?? ep.mal_id ?? `${ep.mal_id ?? ""}-${number ?? ""}`;
-      return {
-        id: String(id),
-        number: typeof number === "number" ? number : Number(number) || 0,
-        title,
-        air_date,
-      };
-    },
-  );
+  const base = data.episodes || data.results || data.data || [];
+  const episodes = base.map((ep: any, idx: number) => {
+    const number =
+      ep.number ??
+      ep.episode ??
+      ep.episode_number ??
+      ep.ep ??
+      ep.ep_num ??
+      null;
+    const title =
+      ep.title || ep.name || ep.episodeTitle || ep.title_english || undefined;
+    const air_date = ep.air_date ?? ep.aired ?? ep.date ?? null;
+    const n = typeof number === "number" ? number : Number(number) || 0;
+    const finalNum = n > 0 ? n : idx + 1;
+    const id = ep.id ?? ep.mal_id ?? `${ep.mal_id ?? ""}-${finalNum}`;
+    return {
+      id: String(id),
+      number: finalNum,
+      title,
+      air_date,
+    };
+  });
 
   // Normalize pagination to include last_visible_page if possible
   const pagination = data.pagination || data.meta || null;
